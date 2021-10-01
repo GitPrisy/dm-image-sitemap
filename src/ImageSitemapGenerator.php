@@ -6,107 +6,150 @@ class ImageSitemapGenerator
     public function image_sitemap_create() {
         global $wpdb;
 
-        $posts = $wpdb->get_results("SELECT * FROM $wpdb->posts WHERE post_type<>'revision' AND post_status IN ('publish','inherit') ORDER BY `wp_posts`.`post_date` DESC");
+        
+        $query_images_args = array(
+            'post_type'      => 'attachment',
+            'post_mime_type' => 'image',
+            'post_status'    => 'inherit',
+            // 'date_query' => array(
+            //     array(
+            //         'after' => '-30 days'
+            //     )
+            // ),
+            'posts_per_page' => -1,
+        );
+        
+        // $query_posts_args = array(
+        //     'post_type'      => array('noticia', 'post', 'consejos', 'como', 'dgt', 'esenciales', 'listas', 'que-es', 'reportajes', 'coche', 'marcas', 'video', 'foto-a-foto', 'altas-prestaciones', 'breve', 'tecnologia', 'movilidad', 'normativa'),
+        //     'post_status'    => 'published',
+        //     // 'date_query' => array(
+        //     //     array(
+        //     //         'after' => '-30 days'
+        //     //     )
+        //     // ),
+        //     'posts_per_page' => 100,
+        // );
+        // $query_posts = new WP_Query( $query_posts_args );
+        // print_r(get_post_gallery("412272", false));
+        // print_r(get_post_gallery("412272"));die;
 
-        $thumbs = $wpdb->get_results("
-            SELECT * FROM $wpdb->posts p
-            INNER JOIN $wpdb->postmeta pm ON p.id=pm.post_id
-            INNER JOIN $wpdb->posts i ON pm.meta_value=i.id
-            WHERE p.post_type<>'revision' AND p.post_status='publish' AND pm.meta_key='_thumbnail_id
-            ORDER BY `p`.`post_date` DESC'
-        ");
-    
-        if(empty($posts) && empty($thumbs)) {
-            return 0;
-        } else {
-            $images = array();
-            foreach($posts as $post) {
-                if($post->post_type == 'attachment') {
-                    if($post->post_parent != 0 && (get_post_status( $post->post_parent ) == 'publish')) {
-                        $images[$post->post_parent][$post->guid] = 1;
-                        $images_caption[$post->post_parent][$post->post_content] = 1;
-                        $images_title[$post->post_parent][$post->post_title] = 1;
-                    }
-                } elseif(preg_match_all('/img src=("|\')([^"\']+)("|\')/ui',$post->post_content,$matches,PREG_SET_ORDER)) {
-    
-                    foreach($matches as $key => $match) {
-                        $imgurl = $match[2];
-                        if(strtolower(substr($imgurl,0,4)) != 'http') {
-                            $imgurl = get_site_url() .$imgurl;
-                        }
-                        $images[$post->ID][$imgurl] = 1;
-                    }
-                }
-            }
-            foreach($thumbs as $post) {
-                $images[$post->ID][$post->guid] = 1;
-                $images_caption[$post->post_parent][$post->post_content] = 1;
-                $images_title[$post->post_parent][$post->post_title] = 1;
-            }
-            if( count($images) == 0 ) {
-                return 0;
-            } else {
-                $xml  = '<?xml version="1.0" encoding="UTF-8"?>' ."\n";
-                $xml .= '<!-- Created by Diariomotor on ' .date("F j, Y, g:i a") .'" -->' ."\n";
-                $xml .= '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">' ."\n";
-    
-                $limit = 1;
-                foreach($images as $k=>$v) {
-                    
-                    unset($imgurls);
-                    foreach(array_keys($v) as $imgurl) {
-                        if(is_ssl()) {
-                            $imgurl = str_replace('http://','https://',$imgurl);
-                        } else {
-                            $imgurl = str_replace('https://','http://',$imgurl);
-                        }
-                        $imgurls[$imgurl] = 1;
-                    }
-                    $permalink = get_permalink($k);
-                    if(!empty($permalink)) {
+        // get_post($query_posts->posts[0]->gallery)
+        $query_images = new WP_Query( $query_images_args );
 
-                        $img = '';
-                        foreach( array_keys($imgurls) as $key => $imgurl ) {
-                            $caption = $this->ensure_rich_img_data(array_keys($images_caption[$k])[$key]);
-                            $title = $this->ensure_rich_img_data(array_keys($images_title[$k])[$key]);
-                            if (trim($caption) == trim($title)) {
-                                $caption = "";
-                            }
-    
-                            $img .=
-                                "<image:image>" .
-                                "<image:loc>" .$this->escape_xml_entities($imgurl) ."</image:loc>";
-                                
-                            if ($caption != "") {
-                                $img .= "<image:caption>" .$this->escape_xml_entities($caption) ."</image:caption>";
-                            }
-                            if ($title != "") {
-                                $img .= "<image:title>" .$this->escape_xml_entities($title) ."</image:title>";
-                            }
-                            $img .= "</image:image>";
-                        }
-                        $xml .= "<url><loc>" .$this->escape_xml_entities($permalink) ."</loc>" .$img ."</url>";
-                        $limit--;
-                    }
-    
-                    if($limit === 0){
-                        break;
-                    }
-                }
-    
-                $xml .= "</urlset>";
+
+        $images = [];
+        foreach ( $query_images->posts as $image ) {
+            $image_file = $image->guid;
+            $title = $image->post_title;
+            $caption = $image->post_excerpt;
+            $parent_url = get_permalink($image->post_parent);
+
+            $time = strtotime( $image->post_date );
+            $year = date( 'Y', $time );
+            $month = date( 'm', $time );
+            $year_month = "$year-$month";
+
+            if ( strpos($parent_url, '?post') ) {
+                continue;
+            }
+
+            if ( !$image_file || !$title || !$caption || !$parent_url ) {
+                continue;
+            }
+
+            $images[] = ['image_file' => $image_file, 'title' => $title, 'caption' => $caption, 'parent_url' => $parent_url, 'year_month' => $year_month];
+        }
+
+        $old_url = '';
+        $xml = '';
+        $old_year_month = '';
+        $change_month = false;
+        foreach ( $images as $image ) {
+            if ( $old_year_month == '' ) {
+                $old_year_month = $image['year_month'];
+                // $xml .= '<year-month>'. $old_year_month .'</year-month>';
+            }
+            if ( $old_year_month != $image['year_month'] ) {
+                $old_year_month = $image['year_month'];
+                $change_month = true;
+                // $xml .= '<year-month>'. $old_year_month .'</year-month>';
+            }
+            if ( $change_month ) {
+                $xml .= '</url>';
+                $this->write_out_sitemap($xml, $old_year_month);
+                $change_month = false;
+                $old_url = '';
+                $xml = '';
+            }
+
+            if ( $old_url == '' ) {
+                $xml .= '
+                <url>
+                    <loc>'. $image['parent_url'] .'</loc>';
+                $old_url = $image['parent_url'];
+            }
+
+            if ( $image['parent_url'] == $old_url ) {
+                $xml .= '
+                    <image:image>
+                        <image:loc>'. $image['image_file'] .'</image:loc>
+                        <image:caption>'. $image['caption'] .'</image:caption>
+                        <image:title>' . $image['title'] .'</image:title>
+                    </image:image>';
+                $old_url = $image['parent_url'];
+                continue;
+            }
+
+            if ( $image['parent_url'] != $old_url ) {
+                $xml .= '
+                </url>
+                <url>
+                    <loc>'. $image['parent_url'] .'</loc>
+                    <image:image>
+                        <image:loc>'. $image['image_file'] .'</image:loc>
+                        <image:caption>'. $image['caption'] .'</image:caption>
+                        <image:title>' . $image['title'] .'</image:title>
+                    </image:image>';
+                $old_url = $image['parent_url'];
+                continue;
             }
         }
-    
-        $image_sitemap_url = $_SERVER["DOCUMENT_ROOT"].'/sitemap-images.xml';
+        // print_r($xml);die;
+    }
+
+    private function index_sitemap() {
+        $xml = '
+        <?xml version="1.0" encoding="UTF-8"?>
+            <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
+        $files = scandir($_SERVER["DOCUMENT_ROOT"].'/sitemaps-images/');
+        foreach ( $files as $file ) {
+            if ( strpos($file, 'sitemap') === false ) continue;
+            $xml .= '
+            <sitemap>
+                <loc>' .get_site_url(). '/sitemaps-images/' .$file. '</loc>
+            </sitemap>
+            ';
+            // }
+        }
+        $xml .= '</sitemapindex>';
+        $this->write_out_sitemap($xml, 'index', false);
+        // print_r($files);
+        die;
+    }
+
+    private function write_out_sitemap($xml, $sitemap_name, $dir = true) {
+        if ( $dir ) $image_sitemap_url = $_SERVER["DOCUMENT_ROOT"].'/sitemaps-images/sitemap-images-'.$sitemap_name.'.html';
+        if ( !$dir ) $image_sitemap_url = $_SERVER["DOCUMENT_ROOT"].'/sitemap-images-'.$sitemap_name.'.html';
+        
         if($this->is_file_writable($_SERVER["DOCUMENT_ROOT"]) || $this->is_file_writable($image_sitemap_url)) {
-            if(file_put_contents($image_sitemap_url, $xml)) {
-                return count($images);
-            }
+                if(file_put_contents($image_sitemap_url, $xml)) {
+                        return;
+                }
         }
-    
+
         return -1;
     }
+
     
     private function ensure_rich_img_data($img_data) {
     
