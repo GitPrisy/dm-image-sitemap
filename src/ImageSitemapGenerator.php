@@ -2,133 +2,216 @@
 
 class ImageSitemapGenerator 
 {
-
-    public function image_sitemap_create() {
+    public function image_sitemap_create($time = -1) {
         global $wpdb;
 
-        $posts = $wpdb->get_results("SELECT * FROM $wpdb->posts WHERE post_type<>'revision' AND post_status IN ('publish','inherit') ORDER BY `wp_posts`.`post_date` DESC");
-
-        $thumbs = $wpdb->get_results("
-            SELECT * FROM $wpdb->posts p
-            INNER JOIN $wpdb->postmeta pm ON p.id=pm.post_id
-            INNER JOIN $wpdb->posts i ON pm.meta_value=i.id
-            WHERE p.post_type<>'revision' AND p.post_status='publish' AND pm.meta_key='_thumbnail_id
-            ORDER BY `p`.`post_date` DESC'
-        ");
-    
-        if(empty($posts) && empty($thumbs)) {
-            return 0;
+        if ($time == -1) {
+            $query_images_args = array(
+                'post_type'      => 'attachment',
+                'post_mime_type' => 'image',
+                'post_status'    => 'inherit',
+                'posts_per_page' => $time,
+            );
         } else {
-            $images = array();
-            foreach($posts as $post) {
-                if($post->post_type == 'attachment') {
-                    if($post->post_parent != 0 && (get_post_status( $post->post_parent ) == 'publish')) {
-                        $images[$post->post_parent][$post->guid] = 1;
-                        $images_caption[$post->post_parent][$post->post_content] = 1;
-                        $images_title[$post->post_parent][$post->post_title] = 1;
-                    }
-                } elseif(preg_match_all('/img src=("|\')([^"\']+)("|\')/ui',$post->post_content,$matches,PREG_SET_ORDER)) {
-    
-                    foreach($matches as $key => $match) {
-                        $imgurl = $match[2];
-                        if(strtolower(substr($imgurl,0,4)) != 'http') {
-                            $imgurl = get_site_url() .$imgurl;
-                        }
-                        $images[$post->ID][$imgurl] = 1;
-                    }
-                }
-            }
-            foreach($thumbs as $post) {
-                $images[$post->ID][$post->guid] = 1;
-                $images_caption[$post->post_parent][$post->post_content] = 1;
-                $images_title[$post->post_parent][$post->post_title] = 1;
-            }
-            if( count($images) == 0 ) {
-                return 0;
-            } else {
-                $xml  = '<?xml version="1.0" encoding="UTF-8"?>' ."\n";
-                $xml .= '<!-- Created by Diariomotor on ' .date("F j, Y, g:i a") .'" -->' ."\n";
-                $xml .= '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">' ."\n";
-    
-                $limit = 1;
-                foreach($images as $k=>$v) {
-                    
-                    unset($imgurls);
-                    foreach(array_keys($v) as $imgurl) {
-                        if(is_ssl()) {
-                            $imgurl = str_replace('http://','https://',$imgurl);
-                        } else {
-                            $imgurl = str_replace('https://','http://',$imgurl);
-                        }
-                        $imgurls[$imgurl] = 1;
-                    }
-                    $permalink = get_permalink($k);
-                    if(!empty($permalink)) {
+            $query_images_args = array(
+                'post_type'      => 'attachment',
+                'post_mime_type' => 'image',
+                'post_status'    => 'inherit',
+                'date_query' => array(
+                    array(
+                        'after' => '-'.$time.' days'
+                    )
+                ),
+                'posts_per_page' => -1,
+            );
+        }
+        
+        
+        $query_images = new WP_Query( $query_images_args );
+        $images = [];
 
-                        $img = '';
-                        foreach( array_keys($imgurls) as $key => $imgurl ) {
-                            $caption = $this->ensure_rich_img_data(array_keys($images_caption[$k])[$key]);
-                            $title = $this->ensure_rich_img_data(array_keys($images_title[$k])[$key]);
-                            if (trim($caption) == trim($title)) {
-                                $caption = "";
-                            }
-    
-                            $img .=
-                                "<image:image>" .
-                                "<image:loc>" .$this->escape_xml_entities($imgurl) ."</image:loc>";
-                                
-                            if ($caption != "") {
-                                $img .= "<image:caption>" .$this->escape_xml_entities($caption) ."</image:caption>";
-                            }
-                            if ($title != "") {
-                                $img .= "<image:title>" .$this->escape_xml_entities($title) ."</image:title>";
-                            }
-                            $img .= "</image:image>";
-                        }
-                        $xml .= "<url><loc>" .$this->escape_xml_entities($permalink) ."</loc>" .$img ."</url>";
-                        $limit--;
-                    }
-    
-                    if($limit === 0){
-                        break;
-                    }
+        //get images data
+        foreach ( $query_images->posts as $image ) {
+            $image_file = $image->guid;
+            $caption = $image->post_excerpt;
+            $title = $image->post_title;
+            $parent_url = get_permalink($image->post_parent);
+
+            $time = strtotime( $image->post_date );
+            $year = date( 'Y', $time );
+            $month = date( 'm', $time );
+            $year_month = "$year-$month";
+
+            if ( strpos($parent_url, '?post') ) {
+                continue;
+            }
+
+            //if any info is missing, exclude image
+            if ( !$image_file || !$title || !$caption || !$parent_url ) {
+                continue;
+            }
+
+            //include images
+            $images[] = ['image_file' => $image_file, 'title' => $title, 'caption' => $caption, 'parent_url' => $parent_url, 'year_month' => $year_month];
+        }
+
+
+        $old_url = '';
+        $xml = '<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+    xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">';
+        $old_year_month = '';
+        $change_month = false;
+
+        foreach ( $images as $image ) {
+            //no y-m set
+            if ( $old_year_month == '' ) {
+                //set first y-m
+                $old_year_month = $image['year_month'];
+            }
+
+            //if old y-m is diff change y-m
+            if ( $old_year_month != $image['year_month'] ) {
+                $old_year_month = $image['year_month'];
+                $change_month = true;
+            }
+
+            //if change_month, end old sitemap and start new
+            if ( $change_month ) {
+                $xml .= '
+                </url>
+            </urlset>';
+                $this->write_out_sitemap($xml, $old_year_month);
+                
+                $change_month = false;
+                $old_url = '';
+                $xml = '<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+    xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">';
+            }
+
+            //if first url start <url>
+            if ( $old_url == '' ) {
+                $xml .= '
+                <url>
+                    <loc>'. $this->escape_xml_entities($image['parent_url']) .'</loc>';
+                $old_url = $image['parent_url'];
+            }
+
+            //if same url insert into <url>
+            if ( $image['parent_url'] == $old_url ) {
+                $caption = $this->rich_img_data($image['caption']);
+                $title = $this->rich_img_data($image['title']);
+                if ($caption === $title) $caption = "";
+
+                if ($title === "" ) {
+                    $xml .= '
+                    <image:image>
+                        <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                    </image:image>';
+                } else if ($caption === "") {
+                    $xml .= '
+                    <image:image>
+                        <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                        <image:title>'. $this->escape_xml_entities($image['title']) .'</image:title>
+                    </image:image>';
+                } else {
+                    $xml .= '
+                    <image:image>
+                        <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                        <image:caption>'. $this->escape_xml_entities($image['caption']) .'</image:caption>
+                        <image:title>' . $this->escape_xml_entities($image['title']) .'</image:title>
+                    </image:image>';
                 }
-    
-                $xml .= "</urlset>";
+                
+                $old_url = $image['parent_url'];
+                continue;
+            }
+
+            //if new url, end old <url> and start new
+            if ( $image['parent_url'] != $old_url ) {
+                $caption = $this->rich_img_data($image['caption']);
+                $title = $this->rich_img_data($image['title']);
+                if ($caption === $title) $caption = "";
+
+                if ($title === "") {
+                    $xml .= '
+                    </url>
+                    <url>
+                        <loc>'. $this->escape_xml_entities($image['parent_url']) .'</loc>
+                        <image:image>
+                            <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                        </image:image>';
+                } else if ($caption === "") {
+                    $xml .= '
+                    </url>
+                    <url>
+                        <loc>'. $this->escape_xml_entities($image['parent_url']) .'</loc>
+                        <image:image>
+                            <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                            <image:title>'. $this->escape_xml_entities($image['title']) .'</image:title>
+                        </image:image>';
+                } else {
+                    $xml .= '
+                    </url>
+                    <url>
+                        <loc>'. $this->escape_xml_entities($image['parent_url']) .'</loc>
+                        <image:image>
+                            <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                            <image:caption>'. $this->escape_xml_entities($image['caption']) .'</image:caption>
+                            <image:title>'. $this->escape_xml_entities($image['title']) .'</image:title>
+                        </image:image>';
+                }
+                $old_url = $image['parent_url'];
+                continue;
             }
         }
-    
-        $image_sitemap_url = $_SERVER["DOCUMENT_ROOT"].'/sitemap-images.xml';
+    }
+
+    public function index_sitemap() {
+        $xml = '<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
+        $files = scandir($_SERVER["DOCUMENT_ROOT"].'/sitemaps-images/');
+        foreach ( $files as $file ) {
+            if ( strpos($file, '.xml') === false ) continue;
+            $xml .= '
+            <sitemap>
+                <loc>' .get_site_url(). '/sitemaps-images/' .$file. '</loc>
+            </sitemap>
+            ';
+        }
+        $xml .= '</sitemapindex>';
+        $this->write_out_sitemap($xml, 'index', false);
+    }
+
+    private function write_out_sitemap($xml, $sitemap_name, $dir = true) {
+        if ( $dir ) $image_sitemap_url = $_SERVER["DOCUMENT_ROOT"].'/sitemaps-images/sitemap-images-'.$sitemap_name.'.xml';
+        if ( !$dir ) $image_sitemap_url = $_SERVER["DOCUMENT_ROOT"].'/sitemap-images-'.$sitemap_name.'.xml';
+        
         if($this->is_file_writable($_SERVER["DOCUMENT_ROOT"]) || $this->is_file_writable($image_sitemap_url)) {
-            if(file_put_contents($image_sitemap_url, $xml)) {
-                return count($images);
-            }
+                if(file_put_contents($image_sitemap_url, $xml)) {
+                        return;
+                }
         }
-    
+
         return -1;
     }
+
     
-    private function ensure_rich_img_data($img_data) {
+    private function rich_img_data($data) {
     
         $marcas = [
             'abarth', 'alfa-romeo', 'alpine', 'aston-martin', 'audi', 'bentley', 'bmw', 'bugati', 'citroen', 'cupra', 'dacia', 'dfsk', 'ds', 'ferrari', 'fiat', 'ford', 'hispano-suiza', 'honda', 'hyundai', 'jaguar', 'jeep', 'kia', 'koenigsegg', 'lamorghini', 'land-rover', 'lexus', 'lotus', 'maserati', 'mazda', 'mclaren', 'mercedes-benz', 'mg', 'mini', 'mitsubishi', 'nissan', 'opel', 'pagani', 'peugeot', 'polestar', 'porsche', 'renault', 'rolls-royce', 'seat', 'skoda','smart', 'ssangyong', 'subaru', 'suzuki', 'tesla', 'toyota', 'volkswagen', 'volvo'
         ];
-    
-        foreach ($img_data as $data) {
-            $rich_data = false;
-            foreach ($marcas as $marca) {
-                if (strpos($data, $marca)) {
-                    $rich_data = true;
-                    break 1;
-                }
-            }
-    
-            if(!$rich_data) {
-                $img_data = "";
+ 
+        foreach ($marcas as $marca) {
+            if (strpos(strtolower($data), $marca) !== false) {
+                return $data;
             }
         }
     
-        return $img_data;
+        $data = "";
+        return $data;
     }
 
     private function escape_xml_entities($xml) {
