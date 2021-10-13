@@ -2,46 +2,39 @@
 
 class ImageSitemapGenerator 
 {
-
-    public function image_sitemap_create() {
+    public function image_sitemap_create($time = -1) {
         global $wpdb;
 
+        if ($time == -1) {
+            $query_images_args = array(
+                'post_type'      => 'attachment',
+                'post_mime_type' => 'image',
+                'post_status'    => 'inherit',
+                'posts_per_page' => $time,
+            );
+        } else {
+            $query_images_args = array(
+                'post_type'      => 'attachment',
+                'post_mime_type' => 'image',
+                'post_status'    => 'inherit',
+                'date_query' => array(
+                    array(
+                        'after' => '-'.$time.' days'
+                    )
+                ),
+                'posts_per_page' => -1,
+            );
+        }
         
-        $query_images_args = array(
-            'post_type'      => 'attachment',
-            'post_mime_type' => 'image',
-            'post_status'    => 'inherit',
-            // 'date_query' => array(
-            //     array(
-            //         'after' => '-30 days'
-            //     )
-            // ),
-            'posts_per_page' => -1,
-        );
         
-        // $query_posts_args = array(
-        //     'post_type'      => array('noticia', 'post', 'consejos', 'como', 'dgt', 'esenciales', 'listas', 'que-es', 'reportajes', 'coche', 'marcas', 'video', 'foto-a-foto', 'altas-prestaciones', 'breve', 'tecnologia', 'movilidad', 'normativa'),
-        //     'post_status'    => 'published',
-        //     // 'date_query' => array(
-        //     //     array(
-        //     //         'after' => '-30 days'
-        //     //     )
-        //     // ),
-        //     'posts_per_page' => 100,
-        // );
-        // $query_posts = new WP_Query( $query_posts_args );
-        // print_r(get_post_gallery("412272", false));
-        // print_r(get_post_gallery("412272"));die;
-
-        // get_post($query_posts->posts[0]->gallery)
         $query_images = new WP_Query( $query_images_args );
-
-
         $images = [];
+
+        //get images data
         foreach ( $query_images->posts as $image ) {
             $image_file = $image->guid;
-            $title = $image->post_title;
             $caption = $image->post_excerpt;
+            $title = $image->post_title;
             $parent_url = get_permalink($image->post_parent);
 
             $time = strtotime( $image->post_date );
@@ -53,93 +46,147 @@ class ImageSitemapGenerator
                 continue;
             }
 
+            //if any info is missing, exclude image
             if ( !$image_file || !$title || !$caption || !$parent_url ) {
                 continue;
             }
 
+            //include images
             $images[] = ['image_file' => $image_file, 'title' => $title, 'caption' => $caption, 'parent_url' => $parent_url, 'year_month' => $year_month];
         }
 
+
         $old_url = '';
-        $xml = '';
+        $xml = '<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+    xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">';
         $old_year_month = '';
         $change_month = false;
+
         foreach ( $images as $image ) {
+            //no y-m set
             if ( $old_year_month == '' ) {
+                //set first y-m
                 $old_year_month = $image['year_month'];
-                // $xml .= '<year-month>'. $old_year_month .'</year-month>';
             }
+
+            //if old y-m is diff change y-m
             if ( $old_year_month != $image['year_month'] ) {
                 $old_year_month = $image['year_month'];
                 $change_month = true;
-                // $xml .= '<year-month>'. $old_year_month .'</year-month>';
-            }
-            if ( $change_month ) {
-                $xml .= '</url>';
-                $this->write_out_sitemap($xml, $old_year_month);
-                $change_month = false;
-                $old_url = '';
-                $xml = '';
             }
 
+            //if change_month, end old sitemap and start new
+            if ( $change_month ) {
+                $xml .= '
+                </url>
+            </urlset>';
+                $this->write_out_sitemap($xml, $old_year_month);
+                
+                $change_month = false;
+                $old_url = '';
+                $xml = '<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+    xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">';
+            }
+
+            //if first url start <url>
             if ( $old_url == '' ) {
                 $xml .= '
                 <url>
-                    <loc>'. $image['parent_url'] .'</loc>';
+                    <loc>'. $this->escape_xml_entities($image['parent_url']) .'</loc>';
                 $old_url = $image['parent_url'];
             }
 
+            //if same url insert into <url>
             if ( $image['parent_url'] == $old_url ) {
-                $xml .= '
+                $caption = $this->rich_img_data($image['caption']);
+                $title = $this->rich_img_data($image['title']);
+                if ($caption === $title) $caption = "";
+
+                if ($title === "" ) {
+                    $xml .= '
                     <image:image>
-                        <image:loc>'. $image['image_file'] .'</image:loc>
-                        <image:caption>'. $image['caption'] .'</image:caption>
-                        <image:title>' . $image['title'] .'</image:title>
+                        <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
                     </image:image>';
+                } else if ($caption === "") {
+                    $xml .= '
+                    <image:image>
+                        <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                        <image:title>'. $this->escape_xml_entities($image['title']) .'</image:title>
+                    </image:image>';
+                } else {
+                    $xml .= '
+                    <image:image>
+                        <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                        <image:caption>'. $this->escape_xml_entities($image['caption']) .'</image:caption>
+                        <image:title>' . $this->escape_xml_entities($image['title']) .'</image:title>
+                    </image:image>';
+                }
+                
                 $old_url = $image['parent_url'];
                 continue;
             }
 
+            //if new url, end old <url> and start new
             if ( $image['parent_url'] != $old_url ) {
-                $xml .= '
-                </url>
-                <url>
-                    <loc>'. $image['parent_url'] .'</loc>
-                    <image:image>
-                        <image:loc>'. $image['image_file'] .'</image:loc>
-                        <image:caption>'. $image['caption'] .'</image:caption>
-                        <image:title>' . $image['title'] .'</image:title>
-                    </image:image>';
+                $caption = $this->rich_img_data($image['caption']);
+                $title = $this->rich_img_data($image['title']);
+                if ($caption === $title) $caption = "";
+
+                if ($title === "") {
+                    $xml .= '
+                    </url>
+                    <url>
+                        <loc>'. $this->escape_xml_entities($image['parent_url']) .'</loc>
+                        <image:image>
+                            <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                        </image:image>';
+                } else if ($caption === "") {
+                    $xml .= '
+                    </url>
+                    <url>
+                        <loc>'. $this->escape_xml_entities($image['parent_url']) .'</loc>
+                        <image:image>
+                            <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                            <image:title>'. $this->escape_xml_entities($image['title']) .'</image:title>
+                        </image:image>';
+                } else {
+                    $xml .= '
+                    </url>
+                    <url>
+                        <loc>'. $this->escape_xml_entities($image['parent_url']) .'</loc>
+                        <image:image>
+                            <image:loc>'. $this->escape_xml_entities($image['image_file']) .'</image:loc>
+                            <image:caption>'. $this->escape_xml_entities($image['caption']) .'</image:caption>
+                            <image:title>'. $this->escape_xml_entities($image['title']) .'</image:title>
+                        </image:image>';
+                }
                 $old_url = $image['parent_url'];
                 continue;
             }
         }
-        // print_r($xml);die;
     }
 
-    private function index_sitemap() {
-        $xml = '
-        <?xml version="1.0" encoding="UTF-8"?>
-            <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
+    public function index_sitemap() {
+        $xml = '<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">';
         $files = scandir($_SERVER["DOCUMENT_ROOT"].'/sitemaps-images/');
         foreach ( $files as $file ) {
-            if ( strpos($file, 'sitemap') === false ) continue;
+            if ( strpos($file, '.xml') === false ) continue;
             $xml .= '
             <sitemap>
                 <loc>' .get_site_url(). '/sitemaps-images/' .$file. '</loc>
             </sitemap>
             ';
-            // }
         }
         $xml .= '</sitemapindex>';
         $this->write_out_sitemap($xml, 'index', false);
-        // print_r($files);
-        die;
     }
 
     private function write_out_sitemap($xml, $sitemap_name, $dir = true) {
-        if ( $dir ) $image_sitemap_url = $_SERVER["DOCUMENT_ROOT"].'/sitemaps-images/sitemap-images-'.$sitemap_name.'.html';
-        if ( !$dir ) $image_sitemap_url = $_SERVER["DOCUMENT_ROOT"].'/sitemap-images-'.$sitemap_name.'.html';
+        if ( $dir ) $image_sitemap_url = $_SERVER["DOCUMENT_ROOT"].'/sitemaps-images/sitemap-images-'.$sitemap_name.'.xml';
+        if ( !$dir ) $image_sitemap_url = $_SERVER["DOCUMENT_ROOT"].'/sitemap-images-'.$sitemap_name.'.xml';
         
         if($this->is_file_writable($_SERVER["DOCUMENT_ROOT"]) || $this->is_file_writable($image_sitemap_url)) {
                 if(file_put_contents($image_sitemap_url, $xml)) {
@@ -151,27 +198,20 @@ class ImageSitemapGenerator
     }
 
     
-    private function ensure_rich_img_data($img_data) {
+    private function rich_img_data($data) {
     
         $marcas = [
             'abarth', 'alfa-romeo', 'alpine', 'aston-martin', 'audi', 'bentley', 'bmw', 'bugati', 'citroen', 'cupra', 'dacia', 'dfsk', 'ds', 'ferrari', 'fiat', 'ford', 'hispano-suiza', 'honda', 'hyundai', 'jaguar', 'jeep', 'kia', 'koenigsegg', 'lamorghini', 'land-rover', 'lexus', 'lotus', 'maserati', 'mazda', 'mclaren', 'mercedes-benz', 'mg', 'mini', 'mitsubishi', 'nissan', 'opel', 'pagani', 'peugeot', 'polestar', 'porsche', 'renault', 'rolls-royce', 'seat', 'skoda','smart', 'ssangyong', 'subaru', 'suzuki', 'tesla', 'toyota', 'volkswagen', 'volvo'
         ];
-    
-        foreach ($img_data as $data) {
-            $rich_data = false;
-            foreach ($marcas as $marca) {
-                if (strpos($data, $marca)) {
-                    $rich_data = true;
-                    break 1;
-                }
-            }
-    
-            if(!$rich_data) {
-                $img_data = "";
+ 
+        foreach ($marcas as $marca) {
+            if (strpos(strtolower($data), $marca) !== false) {
+                return $data;
             }
         }
     
-        return $img_data;
+        $data = "";
+        return $data;
     }
 
     private function escape_xml_entities($xml) {
