@@ -9,13 +9,16 @@ class ISG_CliCommand
         $this->isg = new ImageSitemapGenerator();
     }
 
-    public function generate() {
-        $this->isg->image_sitemap_create();
+    public function generate_all() {
+        $this->isg->image_sitemap_create_new();
         WP_CLI::success( "Sitemap de imagenes generado." );
+        $this->index();
     }
 
-    public function update() {
-        $this->isg->image_sitemap_create(30);
+    public function generate_month() {
+        $year = intval(date("Y"));
+        $month = intval(date("m"));
+        $this->isg->image_sitemap_create_month($year, $month);
         WP_CLI::success( "Sitemap de imagenes actualizado." );
         $this->index();
     }
